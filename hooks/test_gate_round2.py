@@ -48,3 +48,14 @@ def test_log_stays_valid_json_and_masks_quoted_secrets(tmp_path):
     text = "\n".join(lines)
     for secret in ["two words", "abc123", "zzz9"]:
         assert secret not in text, secret
+
+
+def test_agent_advice_only_for_main_model_delegations(tmp_path):
+    ag = lambda **kw: {"tool_name": "Agent", "tool_input": {"prompt": "x", **kw}}
+    out = run("pre", ag(subagent_type="general-purpose"), tmp_path)
+    assert "subagents:reader" in out["hookSpecificOutput"]["additionalContext"]
+    assert "permissionDecision" not in out["hookSpecificOutput"]  # advice, never a deny
+    assert run("pre", ag(), tmp_path) is not None  # default type is general-purpose
+    assert run("pre", ag(subagent_type="subagents:reader"), tmp_path) is None
+    assert run("pre", ag(subagent_type="general-purpose", model="fable"), tmp_path) is None
+    assert run("pre", {**ag(subagent_type="Explore"), "agent_id": "a1"}, tmp_path) is None

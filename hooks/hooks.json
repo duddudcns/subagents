@@ -2,7 +2,7 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Read|WebFetch|Bash|PowerShell|mcp__Claude_Browser__get_page_text|mcp__Claude_Browser__read_page|mcp__claude-in-chrome__get_page_text|mcp__claude-in-chrome__read_page|mcp__remote-devices__Claude_Browser__get_page_text|mcp__remote-devices__Claude_Browser__read_page",
+        "matcher": "Read|WebFetch|Bash|PowerShell|Agent|Task|mcp__Claude_Browser__get_page_text|mcp__Claude_Browser__read_page|mcp__claude-in-chrome__get_page_text|mcp__claude-in-chrome__read_page|mcp__remote-devices__Claude_Browser__get_page_text|mcp__remote-devices__Claude_Browser__read_page",
         "hooks": [ { "type": "command", "command": "python -S -I \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" pre || python3 -S -I \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" pre", "timeout": 10 } ]
       }
     ],

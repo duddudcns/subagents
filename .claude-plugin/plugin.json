@@ -1,6 +1,6 @@
 {
   "name": "subagents",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Cheap subagents for mechanical, token-heavy work (reader, editor, runner, web, browser) so the main agent keeps only judgement in its context.",
   "author": { "name": "duddudcns" }
 }

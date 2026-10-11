@@ -1,6 +1,8 @@
 """Delegation gate for the main agent. Calls made by subagents (input carries agent_id) are never gated.
 
 pre (PreToolUse):
+- Agent/Task calls that would run on the main model (no subagents:* type, no explicit model) get a reminder
+  to use the Haiku agents for mechanical work. Never denied.
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
   They are bulk by nature, so they go to subagents:web or subagents:browser.
 - A Read whose returned bytes reach SUBAGENTS_READ_KB (default 40 KB) is denied. The bytes are counted for the
@@ -138,6 +140,18 @@ def pre(ev, inp, cwd):
         deny(f"{tool} returns bulk page content that would stay in the main context. Delegate it to the {agent} agent "
              "with the exact question and what counts as an answer, then review its findings yourself. For a small "
              "check on a page you can also use the browser's find tool.")
+        return
+    if tool in ("Agent", "Task"):
+        st, model = str(inp.get("subagent_type") or ""), str(inp.get("model") or "")
+        if st.startswith("subagents:") or model:
+            return  # already a Haiku agent, or the model was chosen on purpose (e.g. a review)
+        log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "advise"})
+        if MODE != "observe":
+            emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
+                  f"This delegates to '{st or 'general-purpose'}', which runs on the main model. If the task is mechanical "
+                  "(reading/summarising files or logs, applying decided edits, running commands, web lookups, page "
+                  "checks), use subagents:reader / editor / runner / web / browser instead - Haiku, about 1/25 the cost. "
+                  "Keep this agent only for work that needs judgement."}})
         return
     if tool == "Read":
         path = resolve(inp.get("file_path", ""), cwd)
