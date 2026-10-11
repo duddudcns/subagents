@@ -1,5 +1,5 @@
 ---
-name: haiku-web
+name: web
 description: Use proactively for web lookups and research - docs, prices, release notes, community reports, comparisons - when the main agent needs a sourced summary. Give it the question and what counts as evidence.
 tools: WebSearch, WebFetch
 model: haiku

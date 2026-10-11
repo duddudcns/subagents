@@ -1,5 +1,5 @@
 ---
-name: haiku-reader
+name: reader
 description: Use proactively for mechanical reading - large files, logs, many files, repo-wide searches - when the main agent needs specific facts or a short summary, not the raw content. Give it the exact question. Not for content the main agent must judge itself.
 tools: Read, Grep, Glob, Bash
 model: haiku

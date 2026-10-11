@@ -1,5 +1,5 @@
 ---
-name: haiku-runner
+name: runner
 description: Use proactively to run given shell commands whose output is long - test suites, builds, log queries, status checks over ssh - and report only the result. The main agent supplies the exact commands. Not for deciding what to run or fixing failures.
 tools: Bash, PowerShell, Read, Grep, Glob
 model: haiku

@@ -1,14 +1,15 @@
-# haiku-delegate
+# subagents
 
-The main agent (Opus) keeps all thinking: review, decisions, analysis. Mechanical work goes to four Haiku 5.5
-(medium effort) subagents. They skip CLAUDE.md and get only the tools they need, which keeps the startup cost low.
+The main agent (Opus) keeps all thinking: review, decisions, analysis. Mechanical, token-heavy work goes to these
+subagents. They currently run on Haiku 5.5 with medium effort; the model is set per agent in `agents/*.md`. They skip CLAUDE.md and get only the tools they need, which keeps the startup cost low.
 
 | Agent | Use for | Tools |
 |---|---|---|
-| `haiku-reader` | Getting facts or a short summary from big files, logs, many files, or repo-wide search | Read, Grep, Glob, Bash (read-only) |
-| `haiku-editor` | Edits the main agent already decided: renames, repeated changes, a precise spec | Read, Edit, Write, Grep, Glob |
-| `haiku-runner` | Running given commands with long output: tests, builds, log queries, ssh status | Bash, PowerShell, Read, Grep, Glob |
-| `haiku-web` | Web lookups and research, with sources | WebSearch, WebFetch |
+| `reader` | Getting facts or a short summary from big files, logs, many files, or repo-wide search | Read, Grep, Glob, Bash (read-only) |
+| `editor` | Edits the main agent already decided: renames, repeated changes, a precise spec | Read, Edit, Write, Grep, Glob |
+| `runner` | Running given commands with long output: tests, builds, log queries, ssh status | Bash, PowerShell, Read, Grep, Glob |
+| `web` | Web lookups and research, with sources | WebSearch, WebFetch |
+| `browser` | Page checks: page text or structure, screenshots, console errors. Read-only, never submits | Claude Browser read tools |
 
 Each agent answers in a fixed short format:
 - It gives `path:line` for every fact.
@@ -19,12 +20,12 @@ Each agent answers in a fixed short format:
 
 ```
 /plugin marketplace add duddudcns/claude-plugins
-/plugin install haiku-delegate@duddudcns
+/plugin install subagents@duddudcns
 ```
 
 ## Recommended rule (add to your CLAUDE.md)
 
-> Judgement stays in main. Mechanical reading, edits, command runs and web lookups go to the haiku-delegate agents.
+> Judgement stays in main. Mechanical reading, edits, command runs and web lookups go to the subagents agents (subagents:reader, :editor, :runner, :web, :browser).
 > Main reviews every result and verifies flagged points. Main does it directly when the content is what main must
 > judge, or for a few-line edit in a file it already has open. Escalate to Sonnet only after Haiku fails a
 > well-specified task twice.

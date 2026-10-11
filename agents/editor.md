@@ -1,5 +1,5 @@
 ---
-name: haiku-editor
+name: editor
 description: Use proactively for mechanical edits the main agent has already decided - renames across files, repeated changes, applying a precise spec, writing a file from a given outline. The instruction must say exactly what to change. Not for design decisions or bug hunting.
 tools: Read, Edit, Write, Grep, Glob
 model: haiku
