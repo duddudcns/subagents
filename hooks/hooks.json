@@ -1,10 +1,16 @@
 {
   "hooks": {
     "PreToolUse": [
-      { "matcher": "Read|WebFetch|WebSearch|mcp__Claude_Browser__get_page_text|mcp__Claude_Browser__read_page", "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" pre", "timeout": 10 } ] }
+      {
+        "matcher": "Read|WebFetch|Bash|PowerShell|mcp__Claude_Browser__get_page_text|mcp__Claude_Browser__read_page|mcp__claude-in-chrome__get_page_text|mcp__claude-in-chrome__read_page|mcp__remote-devices__Claude_Browser__get_page_text|mcp__remote-devices__Claude_Browser__read_page",
+        "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" pre || python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" pre", "timeout": 10 } ]
+      }
     ],
     "PostToolUse": [
-      { "matcher": "Bash|PowerShell|Grep", "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" post", "timeout": 10 } ] }
+      {
+        "matcher": "Bash|PowerShell|Grep",
+        "hooks": [ { "type": "command", "command": "python \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" post || python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" post", "timeout": 10 } ]
+      }
     ]
   }
 }

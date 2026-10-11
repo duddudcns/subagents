@@ -1,115 +1,175 @@
-"""Delegation gate for the main agent. Calls made by subagents are never gated.
+"""Delegation gate for the main agent. Calls made by subagents (input carries agent_id) are never gated.
 
-pre: PreToolUse on Read, WebFetch, WebSearch, and the browser page readers (get_page_text, read_page).
-  Web and browser page reads by main are always denied, with a pointer to subagents:web or subagents:browser.
-  A whole-file Read (no offset and no limit) of a file of SUBAGENTS_READ_KB or more is denied. The default is 40 KB,
-  about 10k tokens. The deny message points to subagents:reader or a ranged read.
-post: PostToolUse on Bash, PowerShell and Grep.
-  Output of SUBAGENTS_OUT_KB or more (default 20 KB) only adds a reminder. The output is already in the context by then,
-  so it cannot be blocked; the reminder steers the next similar call.
+pre (PreToolUse):
+- WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
+  They are bulk by nature, so the call goes to subagents:web or subagents:browser.
+- A Read whose expected size is SUBAGENTS_READ_KB or more (default 40 KB) is denied. The size is estimated from the
+  lines it would return (limit, default 2000) times the file's average line size, so a huge limit is no bypass.
+  Images and PDFs are exempt, because main may need to see them.
+- Bash/PowerShell that just dumps a big file (cat/type/Get-Content/gc FILE with no head/tail/select) is denied the same way.
+post (PostToolUse on Bash, PowerShell, Grep):
+- Output text of SUBAGENTS_OUT_KB or more (default 20 KB) adds a reminder. It cannot block, because the output already ran.
 
-Every decision is appended to ~/.claude/subagents-gate.jsonl.
-SUBAGENTS_GATE=off disables the gate. SUBAGENTS_GATE=observe logs decisions without acting on them.
+Every decision is appended to ~/.claude/subagents-gate.jsonl. Secrets are masked and the log rotates at 5 MB.
+SUBAGENTS_GATE=off disables the gate; SUBAGENTS_GATE=observe logs decisions without acting on them.
+Any error lets the call through: the gate fails open and always exits 0.
 """
 import json
 import os
+import re
+import shlex
 import sys
 import time
 from pathlib import Path
 
-MODE = os.environ.get("SUBAGENTS_GATE", "on")
-READ_KB = float(os.environ.get("SUBAGENTS_READ_KB", 40))
-OUT_KB = float(os.environ.get("SUBAGENTS_OUT_KB", 20))
 LOG = Path.home() / ".claude" / "subagents-gate.jsonl"
-SKIP_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".pdf", ".ipynb")
+SKIP_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".pdf")
+READ_DEFAULT_LINES = 2000
+DELEGATE_ALWAYS = re.compile(r"^(WebFetch|mcp__.*(Claude_Browser|claude-in-chrome).*__(get_page_text|read_page))$")
+DUMP_CMD = re.compile(r"^\s*(cat|type|get-content|gc)\s+(.+?)\s*$", re.I)
+PIPE_LIMITERS = re.compile(r"\|\s*(head|tail|select|select-object|grep|rg|findstr|wc|sed|awk)\b|-(totalcount|tail|head)\b", re.I)
+SECRET = re.compile(r"(?i)(authorization|bearer|api[_-]?key|token|password|secret)([\"'=:\s]+)(?:(?:bearer|basic)\s+)?[^\s\"']+")
+
+
+def env_kb(name, default):
+    try:
+        return float(os.environ.get(name, default))
+    except ValueError:
+        return float(default)
 
 
 def log(rec):
     try:
-        with LOG.open("a", encoding="utf-8") as f:
-            f.write(json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "mode": MODE, **rec}, ensure_ascii=False) + "\n")
-    except OSError:
+        LOG.parent.mkdir(parents=True, exist_ok=True)
+        if LOG.exists() and LOG.stat().st_size > 5_000_000:
+            LOG.replace(LOG.with_suffix(".jsonl.1"))
+        line = json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "mode": MODE, **rec}, ensure_ascii=False)
+        with LOG.open("a", encoding="utf-8", errors="replace") as f:
+            f.write(SECRET.sub(r"\1\2***", line) + "\n")
+    except Exception:
         pass
-
-
-def size_kb(resp) -> float:
-    if resp is None:
-        return 0.0
-    s = resp if isinstance(resp, str) else json.dumps(resp, ensure_ascii=False)
-    return len(s.encode("utf-8", "ignore")) / 1024
 
 
 def emit(obj):
     sys.stdout.write(json.dumps(obj))
 
 
-DELEGATE_ALWAYS = {
-    "WebFetch": "subagents:web",
-    "WebSearch": "subagents:web",
-    "mcp__Claude_Browser__get_page_text": "subagents:browser",
-    "mcp__Claude_Browser__read_page": "subagents:browser",
-}
-
-
 def deny(reason):
-    emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                 "permissionDecisionReason": reason}})
+    if MODE != "observe":
+        emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "permissionDecision": "deny",
+                                     "permissionDecisionReason": reason}})
 
 
-def pre(ev, inp):
+def resolve(path, cwd):
+    """Absolute Path for Windows, Git Bash (/c/...) and relative paths (relative to the session cwd)."""
+    p = str(path).strip().strip('"').strip("'")
+    m = re.match(r"^/([a-zA-Z])/(.*)$", p)
+    if m and os.name == "nt":
+        p = f"{m.group(1)}:/{m.group(2)}"
+    q = Path(p).expanduser()
+    if not q.is_absolute() and cwd:
+        q = Path(cwd) / q
+    return q
+
+
+def read_estimate_kb(path, limit):
+    """KB a Read would return: the whole file if it has <= limit lines, else limit * average line size."""
+    size = path.stat().st_size
+    if size < 1024 * READ_KB:  # cannot exceed the threshold
+        return size / 1024
+    with path.open("rb") as f:
+        lines = sum(1 for _ in f) or 1
+    return min(size, size / lines * limit) / 1024
+
+
+def pre(ev, inp, cwd):
     tool = ev.get("tool_name", "")
-    if tool in DELEGATE_ALWAYS:
-        # Page and search content is bulk by nature; main only needs the findings.
-        agent = DELEGATE_ALWAYS[tool]
+    if DELEGATE_ALWAYS.match(tool):
+        agent = "subagents:web" if tool == "WebFetch" else "subagents:browser"
         log({"phase": "pre", "tool": tool, "action": "deny", "to": agent})
-        if MODE != "observe":
-            deny(f"{tool} output is bulk content that would stay in the main context. Delegate it to the {agent} agent "
-                 "with the exact question and what counts as an answer; review its findings yourself.")
+        deny(f"{tool} returns bulk page content that would stay in the main context. Delegate it to the {agent} agent "
+             "with the exact question and what counts as an answer, then review its findings yourself. For a small "
+             "check on a page you can also use the browser's find tool.")
         return
-    if tool != "Read" or inp.get("offset") is not None or inp.get("limit") is not None:
+    if tool == "Read":
+        path = resolve(inp.get("file_path", ""), cwd)
+        if path.suffix.lower() in SKIP_EXT or not path.is_file():
+            return
+        limit = inp.get("limit")
+        limit = int(limit) if isinstance(limit, (int, float)) and limit > 0 else READ_DEFAULT_LINES
+        kb = read_estimate_kb(path, limit)
+        if kb < READ_KB:
+            return
+        log({"phase": "pre", "tool": tool, "path": str(path), "kb": round(kb, 1), "limit": limit, "action": "deny"})
+        deny(f"This Read would return about {kb:.0f} KB (about {kb * 256:.0f} tokens) of {path.name}. It would stay in the "
+             "main context and be re-read on every later call. Delegate it to the subagents:reader agent with the exact "
+             "question. If you need specific lines for your own judgement, Read a smaller range: use offset/limit with "
+             f"fewer lines, below about {READ_KB:.0f} KB.")
         return
-    path = inp.get("file_path", "")
-    try:
-        kb = os.path.getsize(path) / 1024
-    except OSError:
-        return
-    if path.lower().endswith(SKIP_EXT) or kb < READ_KB:
-        return
-    log({"phase": "pre", "tool": "Read", "path": path, "kb": round(kb, 1), "action": "deny"})
-    if MODE == "observe":
-        return
-    reason = (f"{path} is {kb:.0f} KB (about {kb * 256:.0f} tokens). Read whole, it would stay in the main context and be "
-              "re-read on every later call. Delegate it to the subagents:reader agent with the exact question, or Read "
-              "a range with offset/limit if you need specific lines for your own judgement.")
-    deny(reason)
+    if tool in ("Bash", "PowerShell"):
+        cmd = str(inp.get("command", ""))
+        m = DUMP_CMD.match(cmd)
+        if not m or PIPE_LIMITERS.search(cmd) or re.search(r"[;&|<>]", m.group(2)):
+            return
+        try:
+            args = shlex.split(m.group(2), posix=os.name != "nt")
+        except ValueError:
+            return
+        files = [resolve(a, cwd) for a in args if not a.startswith("-")]
+        kb = sum(f.stat().st_size for f in files if f.is_file()) / 1024
+        if kb < READ_KB:
+            return
+        log({"phase": "pre", "tool": tool, "cmd": cmd[:200], "kb": round(kb, 1), "action": "deny"})
+        deny(f"This command dumps about {kb:.0f} KB of file content into the main context. Delegate it to the "
+             "subagents:reader agent with the exact question. If you need specific lines, use Read with offset/limit.")
 
 
-def post(ev, inp):
-    kb = size_kb(ev.get("tool_response"))
+def response_text(resp):
+    """Only the text that reaches the model: stdout/stderr/output/content fields, not metadata."""
+    if resp is None:
+        return ""
+    if isinstance(resp, str):
+        return resp
+    if isinstance(resp, list):
+        return "".join(response_text(r) for r in resp)
+    if isinstance(resp, dict):
+        keys = [k for k in ("stdout", "stderr", "output", "content", "text", "result") if k in resp]
+        if keys:
+            return "".join(response_text(resp[k]) for k in keys)
+        return json.dumps(resp, ensure_ascii=False)
+    return str(resp)
+
+
+def post(ev, inp, cwd):
+    tool = ev.get("tool_name", "")
+    kb = len(response_text(ev.get("tool_response")).encode("utf-8", "ignore")) / 1024
     if kb < OUT_KB:
         return
-    tool = ev.get("tool_name", "")
     log({"phase": "post", "tool": tool, "kb": round(kb, 1), "action": "remind",
          "cmd": str(inp.get("command") or inp.get("pattern") or "")[:200]})
     if MODE == "observe":
         return
-    msg = (f"That {tool} output was {kb:.0f} KB and now sits in the main context. For similar long-output work, use "
-           "subagents:runner for commands or subagents:reader for searches, and get back only the result.")
-    emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": msg}})
+    emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
+          f"That {tool} output was about {kb:.0f} KB of text in the main context. For similar long-output work, use "
+          "subagents:runner for commands or subagents:reader for searches, and get back only the result."}})
 
 
 def main():
-    if MODE == "off":
-        return
     try:
-        ev = json.load(sys.stdin)
-    except ValueError:
-        return  # fail open
-    if ev.get("agent_id"):
-        return  # a subagent's own call
-    inp = ev.get("tool_input") or {}
-    (post if len(sys.argv) > 1 and sys.argv[1] == "post" else pre)(ev, inp)
+        ev = json.loads(sys.stdin.buffer.read().decode("utf-8", "replace"))
+        if not isinstance(ev, dict) or ev.get("agent_id"):
+            return  # bad input, or a subagent's own call
+        inp = ev.get("tool_input") if isinstance(ev.get("tool_input"), dict) else {}
+        (post if len(sys.argv) > 1 and sys.argv[1] == "post" else pre)(ev, inp, ev.get("cwd") or "")
+    except Exception:
+        pass  # fail open
 
+
+MODE = os.environ.get("SUBAGENTS_GATE", "on")
+READ_KB = env_kb("SUBAGENTS_READ_KB", 40)
+OUT_KB = env_kb("SUBAGENTS_OUT_KB", 20)
 
 if __name__ == "__main__":
-    main()
+    if MODE != "off":
+        main()
+    sys.exit(0)

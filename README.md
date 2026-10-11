@@ -20,17 +20,23 @@ Each agent answers in a fixed short format:
 
 `hooks/gate.py` enforces delegation instead of relying on a rule. Calls made by subagents are never gated.
 
-- **Web and browser page reads are denied** (WebFetch, WebSearch, browser `get_page_text`, `read_page`). The deny
-  message points to `subagents:web` or `subagents:browser`.
-- **A whole-file Read of a file of 40 KB or more is denied.** The deny message points to `subagents:reader`, or to a
-  ranged Read with offset/limit when main needs the lines for its own judgement.
-- **Bash, PowerShell or Grep output of 20 KB or more adds a reminder only.** The output has already entered context by
-  then, so it cannot be blocked.
-- **Logging:** every decision is written to `~/.claude/subagents-gate.jsonl`.
-- **Controls:**
-  - `SUBAGENTS_GATE=observe` logs decisions only. `SUBAGENTS_GATE=off` disables the gate.
-  - The thresholds are set with `SUBAGENTS_READ_KB` and `SUBAGENTS_OUT_KB`.
-- **Failures:** the hook fails open (it allows the call) on bad input or a missing file.
+- **Bulk page reads are denied:** WebFetch, and `get_page_text` / `read_page` in the built-in browser, Chrome and
+  remote-device variants. The deny message points to `subagents:web` or `subagents:browser`. WebSearch is allowed,
+  because it returns short snippets.
+- **Big reads are denied:** a Read that would return about 40 KB or more. The size is estimated from the requested
+  line range (the default is 2000 lines), so a huge `limit` does not get around the gate.
+  - A smaller ranged Read for main's own judgement still passes.
+  - Images and PDFs are exempt. Notebooks are gated.
+- **File dumps through the shell are denied:** `cat`, `type`, `Get-Content` or `gc` of 40 KB or more, unless the
+  output is piped into head, tail, select, grep and similar.
+- **Big outputs get a reminder only:** Bash, PowerShell or Grep output of 20 KB or more adds a reminder. Only the
+  output text is counted, not metadata.
+- **Logging:** decisions go to `~/.claude/subagents-gate.jsonl`. Secrets are masked and the file rotates at 5 MB.
+- **Settings:**
+  - `SUBAGENTS_GATE=observe` logs decisions without acting on them. `SUBAGENTS_GATE=off` disables the gate.
+  - `SUBAGENTS_READ_KB` and `SUBAGENTS_OUT_KB` set the thresholds. A bad value falls back to the default.
+- **Failure behaviour:** any error lets the call through, and the exit code is always 0. The hook runs `python`, or
+  `python3` when `python` is missing.
 
 ## Install
 
