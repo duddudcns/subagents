@@ -16,6 +16,22 @@ Each agent answers in a fixed short format:
 - It writes "not found" when something is missing and never guesses.
 - It lists tricky points (rounding, null vs empty, boundary values, later corrections) under "Uncertain".
 
+## Gate hook (enforced, main agent only)
+
+`hooks/gate.py` enforces delegation instead of relying on a rule. Calls made by subagents are never gated.
+
+- **Web and browser page reads are denied** (WebFetch, WebSearch, browser `get_page_text`, `read_page`). The deny
+  message points to `subagents:web` or `subagents:browser`.
+- **A whole-file Read of a file of 40 KB or more is denied.** The deny message points to `subagents:reader`, or to a
+  ranged Read with offset/limit when main needs the lines for its own judgement.
+- **Bash, PowerShell or Grep output of 20 KB or more adds a reminder only.** The output has already entered context by
+  then, so it cannot be blocked.
+- **Logging:** every decision is written to `~/.claude/subagents-gate.jsonl`.
+- **Controls:**
+  - `SUBAGENTS_GATE=observe` logs decisions only. `SUBAGENTS_GATE=off` disables the gate.
+  - The thresholds are set with `SUBAGENTS_READ_KB` and `SUBAGENTS_OUT_KB`.
+- **Failures:** the hook fails open (it allows the call) on bad input or a missing file.
+
 ## Install
 
 ```
