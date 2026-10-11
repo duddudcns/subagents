@@ -150,7 +150,8 @@ def post(ev, inp, cwd):
     if MODE == "observe":
         return
     emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
-          f"That {tool} output was about {kb:.0f} KB of text in the main context. For similar long-output work, use "
+          f"That {tool} call produced about {kb:.0f} KB of output. Whatever part of it was shown stays in the main "
+          "context. For similar long-output work, use "
           "subagents:runner for commands or subagents:reader for searches, and get back only the result."}})
 
 
