@@ -1,0 +1,6 @@
+{
+  "name": "haiku-delegate",
+  "version": "0.1.0",
+  "description": "Keep judgement in the main agent; hand mechanical reading, editing, command runs and web lookups to Haiku subagents (haiku-reader, haiku-editor, haiku-runner, haiku-web).",
+  "author": { "name": "duddudcns" }
+}
