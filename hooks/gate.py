@@ -2,19 +2,22 @@
 
 pre (PreToolUse):
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
-  They are bulk by nature, so the call goes to subagents:web or subagents:browser.
-- A Read whose expected size is SUBAGENTS_READ_KB or more (default 40 KB) is denied. The size is estimated from the
-  lines it would return (limit, default 2000) times the file's average line size, so a huge limit is no bypass.
-  Images and PDFs are exempt, because main may need to see them.
-- Bash/PowerShell that just dumps a big file (cat/type/Get-Content/gc FILE with no head/tail/select) is denied the same way.
+  They are bulk by nature, so they go to subagents:web or subagents:browser.
+- A Read whose returned bytes reach SUBAGENTS_READ_KB (default 40 KB) is denied. The bytes are counted for the
+  requested lines (offset, then limit with a default of 2000), with each line capped at Read's 2000-character cut.
+  Counting stops at the threshold. Images and PDFs are exempt, because main may need to see them.
+- The plain shell dump `cat/type/Get-Content/gc FILE...` of a big file is denied in any `;`/`&&`/`||` segment,
+  unless the segment is piped into head/tail/wc/Select-Object -First/-Last. Other dump forms get the post reminder.
 post (PostToolUse on Bash, PowerShell, Grep):
-- Output text of SUBAGENTS_OUT_KB or more (default 20 KB) adds a reminder. It cannot block, because the output already ran.
+- Output text of SUBAGENTS_OUT_KB or more (default 20 KB) adds a reminder. It cannot block, because the call already ran.
 
-Every decision is appended to ~/.claude/subagents-gate.jsonl. Secrets are masked and the log rotates at 5 MB.
-SUBAGENTS_GATE=off disables the gate; SUBAGENTS_GATE=observe logs decisions without acting on them.
+Every decision is appended to ~/.claude/subagents-gate.jsonl. Secrets are masked before serialisation, and the log
+rotates at 5 MB. SUBAGENTS_GATE=off disables the gate; SUBAGENTS_GATE=observe logs decisions without acting on them.
 Any error lets the call through: the gate fails open and always exits 0.
 """
+import glob
 import json
+import math
 import os
 import re
 import shlex
@@ -25,17 +28,35 @@ from pathlib import Path
 LOG = Path.home() / ".claude" / "subagents-gate.jsonl"
 SKIP_EXT = (".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".pdf")
 READ_DEFAULT_LINES = 2000
+READ_LINE_CAP = 2000  # Read truncates longer lines to this many characters
 DELEGATE_ALWAYS = re.compile(r"^(WebFetch|mcp__.*(Claude_Browser|claude-in-chrome).*__(get_page_text|read_page))$")
 DUMP_CMD = re.compile(r"^\s*(cat|type|get-content|gc)\s+(.+?)\s*$", re.I)
-PIPE_LIMITERS = re.compile(r"\|\s*(head|tail|select|select-object|grep|rg|findstr|wc|sed|awk)\b|-(totalcount|tail|head)\b", re.I)
-SECRET = re.compile(r"(?i)(authorization|bearer|api[_-]?key|token|password|secret)([\"'=:\s]+)(?:(?:bearer|basic)\s+)?[^\s\"']+")
+# Only filters that bound the output size count; grep/sed/awk can pass everything through.
+PIPE_LIMITERS = re.compile(r"\|\s*(head|tail|wc)\b|\|\s*(select|select-object)\s+-(first|last)\b|-(totalcount|tail|head)\b",
+                           re.I)
+SEGMENT_SPLIT = re.compile(r"\s*(?:;|&&|\|\||\n)\s*")
+SECRET = re.compile(r"""(?ix)(authorization|bearer|api[_-]?key|access[_-]?key|token|passw(?:or)?d|secret)
+                        (["'=:\s]+)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s"']+)""")
 
 
 def env_kb(name, default):
+    """A finite positive number from the environment, else the default."""
     try:
-        return float(os.environ.get(name, default))
+        v = float(os.environ.get(name, default))
     except ValueError:
         return float(default)
+    return v if math.isfinite(v) and v > 0 else float(default)
+
+
+def mask(v):
+    """Mask secrets inside every string of a log record, before it is serialised."""
+    if isinstance(v, str):
+        return SECRET.sub(lambda m: m.group(1) + m.group(2) + "***", v)
+    if isinstance(v, dict):
+        return {k: mask(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [mask(x) for x in v]
+    return v
 
 
 def log(rec):
@@ -43,9 +64,9 @@ def log(rec):
         LOG.parent.mkdir(parents=True, exist_ok=True)
         if LOG.exists() and LOG.stat().st_size > 5_000_000:
             LOG.replace(LOG.with_suffix(".jsonl.1"))
-        line = json.dumps({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "mode": MODE, **rec}, ensure_ascii=False)
+        line = json.dumps(mask({"t": time.strftime("%Y-%m-%dT%H:%M:%S"), "mode": MODE, **rec}), ensure_ascii=False)
         with LOG.open("a", encoding="utf-8", errors="replace") as f:
-            f.write(SECRET.sub(r"\1\2***", line) + "\n")
+            f.write(line + "\n")
     except Exception:
         pass
 
@@ -72,14 +93,41 @@ def resolve(path, cwd):
     return q
 
 
-def read_estimate_kb(path, limit):
-    """KB a Read would return: the whole file if it has <= limit lines, else limit * average line size."""
-    size = path.stat().st_size
-    if size < 1024 * READ_KB:  # cannot exceed the threshold
-        return size / 1024
+def read_estimate_kb(path, offset, limit):
+    """KB of lines offset..offset+limit-1 (1-based), each capped like Read caps it; stops at the threshold."""
+    if path.stat().st_size < 1024 * READ_KB:  # cannot reach the threshold
+        return path.stat().st_size / 1024
+    total, cap = 0, 1024 * READ_KB
     with path.open("rb") as f:
-        lines = sum(1 for _ in f) or 1
-    return min(size, size / lines * limit) / 1024
+        for i, line in enumerate(f, 1):
+            if i < offset:
+                continue
+            if i >= offset + limit:
+                break
+            total += min(len(line), READ_LINE_CAP * 4)  # at most 4 bytes per character
+            if total >= cap:
+                break
+    return total / 1024
+
+
+def dump_kb(segment, cwd):
+    """KB that one command segment dumps in the plain `cat/type/gc FILE...` form; bounded pipes are exempt."""
+    if PIPE_LIMITERS.search(segment):
+        return 0.0
+    m = DUMP_CMD.match(segment.split("|")[0])
+    if not m:
+        return 0.0
+    try:
+        args = shlex.split(re.sub(r"\s*\d?>.*$", "", m.group(2)), posix=os.name != "nt")
+    except ValueError:
+        return 0.0
+    files = []
+    for a in args:
+        if a.startswith("-"):
+            continue
+        p = resolve(a, cwd)
+        files += [Path(x) for x in glob.glob(str(p))] if any(c in a for c in "*?[") else [p]
+    return sum(f.stat().st_size for f in files if f.is_file()) / 1024
 
 
 def pre(ev, inp, cwd):
@@ -95,28 +143,22 @@ def pre(ev, inp, cwd):
         path = resolve(inp.get("file_path", ""), cwd)
         if path.suffix.lower() in SKIP_EXT or not path.is_file():
             return
-        limit = inp.get("limit")
+        limit, offset = inp.get("limit"), inp.get("offset")
         limit = int(limit) if isinstance(limit, (int, float)) and limit > 0 else READ_DEFAULT_LINES
-        kb = read_estimate_kb(path, limit)
+        offset = int(offset) if isinstance(offset, (int, float)) and offset > 1 else 1
+        kb = read_estimate_kb(path, offset, limit)
         if kb < READ_KB:
             return
-        log({"phase": "pre", "tool": tool, "path": str(path), "kb": round(kb, 1), "limit": limit, "action": "deny"})
-        deny(f"This Read would return about {kb:.0f} KB (about {kb * 256:.0f} tokens) of {path.name}. It would stay in the "
-             "main context and be re-read on every later call. Delegate it to the subagents:reader agent with the exact "
-             "question. If you need specific lines for your own judgement, Read a smaller range: use offset/limit with "
-             f"fewer lines, below about {READ_KB:.0f} KB.")
+        log({"phase": "pre", "tool": tool, "path": str(path), "kb": round(kb, 1), "offset": offset, "limit": limit,
+             "action": "deny"})
+        deny(f"This Read would return about {kb:.0f} KB or more (about {kb * 256:.0f}+ tokens) of {path.name}. It would "
+             "stay in the main context and be re-read on every later call. Delegate it to the subagents:reader agent "
+             "with the exact question. If you need specific lines for your own judgement, Read a smaller range with "
+             f"offset/limit, below about {READ_KB:.0f} KB.")
         return
     if tool in ("Bash", "PowerShell"):
         cmd = str(inp.get("command", ""))
-        m = DUMP_CMD.match(cmd)
-        if not m or PIPE_LIMITERS.search(cmd) or re.search(r"[;&|<>]", m.group(2)):
-            return
-        try:
-            args = shlex.split(m.group(2), posix=os.name != "nt")
-        except ValueError:
-            return
-        files = [resolve(a, cwd) for a in args if not a.startswith("-")]
-        kb = sum(f.stat().st_size for f in files if f.is_file()) / 1024
+        kb = sum(dump_kb(seg, cwd) for seg in SEGMENT_SPLIT.split(cmd))
         if kb < READ_KB:
             return
         log({"phase": "pre", "tool": tool, "cmd": cmd[:200], "kb": round(kb, 1), "action": "deny"})
@@ -125,7 +167,7 @@ def pre(ev, inp, cwd):
 
 
 def response_text(resp):
-    """Only the text that reaches the model: stdout/stderr/output/content fields, not metadata."""
+    """Only the text that reaches the model (stdout/stderr/output/content/...); unknown shapes count as no text."""
     if resp is None:
         return ""
     if isinstance(resp, str):
@@ -133,10 +175,8 @@ def response_text(resp):
     if isinstance(resp, list):
         return "".join(response_text(r) for r in resp)
     if isinstance(resp, dict):
-        keys = [k for k in ("stdout", "stderr", "output", "content", "text", "result") if k in resp]
-        if keys:
-            return "".join(response_text(resp[k]) for k in keys)
-        return json.dumps(resp, ensure_ascii=False)
+        keys = ("stdout", "stderr", "output", "content", "text", "result", "filenames")
+        return "".join(response_text(resp[k]) for k in keys if k in resp)
     return str(resp)
 
 
@@ -151,8 +191,8 @@ def post(ev, inp, cwd):
         return
     emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
           f"That {tool} call produced about {kb:.0f} KB of output. Whatever part of it was shown stays in the main "
-          "context. For similar long-output work, use "
-          "subagents:runner for commands or subagents:reader for searches, and get back only the result."}})
+          "context. For similar long-output work, use subagents:runner for commands or subagents:reader for searches, "
+          "and get back only the result."}})
 
 
 def main():

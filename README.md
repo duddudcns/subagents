@@ -23,15 +23,21 @@ Each agent answers in a fixed short format:
 - **Bulk page reads are denied:** WebFetch, and `get_page_text` / `read_page` in the built-in browser, Chrome and
   remote-device variants. The deny message points to `subagents:web` or `subagents:browser`. WebSearch is allowed,
   because it returns short snippets.
-- **Big reads are denied:** a Read that would return about 40 KB or more. The size is estimated from the requested
-  line range (the default is 2000 lines), so a huge `limit` does not get around the gate.
+- **Big reads are denied:** a Read whose requested lines (offset, then limit, default 2000) add up to about 40 KB or
+  more, with each line capped like Read caps it. A huge `limit` is no bypass, and a tail read with a large `offset`
+  passes when the remaining lines are small. Counting stops at the threshold, so huge files stay fast.
   - A smaller ranged Read for main's own judgement still passes.
   - Images and PDFs are exempt. Notebooks are gated.
-- **File dumps through the shell are denied:** `cat`, `type`, `Get-Content` or `gc` of 40 KB or more, unless the
-  output is piped into head, tail, select, grep and similar.
+- **The common shell dump is denied:** `cat`, `type`, `Get-Content` or `gc` of a file of 40 KB or more. This applies
+  in any `;`, `&&` or `||` segment, and globs are expanded. It does not apply when the output is piped into head,
+  tail, wc or `Select-Object -First`/`-Last`. Other dump forms (`head -c`, `tail -n +1`, scripts) are not caught;
+  they get the post reminder instead.
 - **Big outputs get a reminder only:** Bash, PowerShell or Grep output of 20 KB or more adds a reminder. Only the
   output text is counted, not metadata.
-- **Logging:** decisions go to `~/.claude/subagents-gate.jsonl`. Secrets are masked and the file rotates at 5 MB.
+- **Logging:** decisions go to `~/.claude/subagents-gate.jsonl`. Secrets are masked before serialisation, and the
+  file rotates at 5 MB.
+- **Latency:** about 100 ms per hooked call on Windows, mostly Python startup (`-S -I`). A shell command pays this
+  twice, once before and once after.
 - **Settings:**
   - `SUBAGENTS_GATE=observe` logs decisions without acting on them. `SUBAGENTS_GATE=off` disables the gate.
   - `SUBAGENTS_READ_KB` and `SUBAGENTS_OUT_KB` set the thresholds. A bad value falls back to the default.
