@@ -158,7 +158,13 @@ def pre(ev, inp, cwd):
         return
     if tool in ("Bash", "PowerShell"):
         cmd = str(inp.get("command", ""))
-        kb = sum(dump_kb(seg, cwd) for seg in SEGMENT_SPLIT.split(cmd))
+        kb, here = 0.0, cwd
+        for seg in SEGMENT_SPLIT.split(cmd):
+            cd = re.match(r"^\s*(?:cd|set-location|sl|pushd)\s+(.+?)\s*$", seg, re.I)
+            if cd:  # follow `cd DIR && cat FILE` so relative paths resolve where the shell will be
+                here = str(resolve(cd.group(1), here))
+                continue
+            kb += dump_kb(seg, here)
         if kb < READ_KB:
             return
         log({"phase": "pre", "tool": tool, "cmd": cmd[:200], "kb": round(kb, 1), "action": "deny"})

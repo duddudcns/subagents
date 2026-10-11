@@ -23,6 +23,10 @@ def test_shell_dump_variants(tmp_path):
     for c in [f'cat "{p}"; true', f'cd "{tmp_path}" && cat big.log', f'cat "{p}" 2>&1', f'cat "{p}" | grep .',
               "cat *.log"]:
         assert denied(run("pre", bash(c), tmp_path)), c
+    other = tmp_path / "elsewhere"
+    other.mkdir()
+    away = {"tool_name": "Bash", "cwd": str(other), "tool_input": {"command": f'cd "{tmp_path}" && cat big.log; true'}}
+    assert denied(run("pre", away, tmp_path))  # cd is followed, not the session cwd
     for c in [f'cat "{p}" | tail -5', f'cat "{p}" | wc -l', "echo hi; ls"]:
         assert run("pre", bash(c), tmp_path) is None, c
 
