@@ -1,7 +1,7 @@
 """Delegation gate for the main agent. Calls made by subagents (input carries agent_id) are never gated.
 
 pre (PreToolUse):
-- Agent/Task calls that would run on the main model (no subagents:* type, no explicit model) get a reminder
+- Agent/Task calls without a subagents:* type or an explicit model get a reminder
   to use the Haiku agents for mechanical work. Never denied.
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
   They are bulk by nature, so they go to subagents:web or subagents:browser.
@@ -148,9 +148,11 @@ def pre(ev, inp, cwd):
         log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "advise"})
         if MODE != "observe":
             emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
-                  f"This delegates to '{st or 'general-purpose'}', which runs on the main model. If the task is mechanical "
+                  f"This delegates to '{st or 'general-purpose'}', which runs on the main model or that agent's own default "
+                  "model, with its full tool set. If the task is mechanical "
                   "(reading/summarising files or logs, applying decided edits, running commands, web lookups, page "
-                  "checks), use subagents:reader / editor / runner / web / browser instead - Haiku, about 1/25 the cost. "
+                  "checks), use subagents:reader / editor / runner / web / browser instead: Haiku with trimmed tools, "
+                  "a fraction of the cost. "
                   "Keep this agent only for work that needs judgement."}})
         return
     if tool == "Read":
