@@ -1,8 +1,9 @@
 """Delegation gate for the main agent. Calls made by subagents (input carries agent_id) are never gated.
 
 pre (PreToolUse):
-- Agent/Task calls without a subagents:* type or an explicit model get a reminder
-  to use the Haiku agents for mechanical work. Never denied.
+- Agent/Task calls without a subagents:* type or an explicit model get a reminder to use the Haiku agents for
+  mechanical work and to keep each worker's batch small. Explore and Plan without a model are denied: their built-in
+  definition inherits the main model and ignores CLAUDE_CODE_SUBAGENT_MODEL (measured 2026-10-19).
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
   They are bulk by nature, so they go to subagents:web or subagents:browser.
 - A Read whose returned bytes reach SUBAGENTS_READ_KB (default 40 KB) is denied. The bytes are counted for the
@@ -145,6 +146,13 @@ def pre(ev, inp, cwd):
         st, model = str(inp.get("subagent_type") or ""), str(inp.get("model") or "")
         if st.startswith("subagents:") or model:
             return  # already a Haiku agent, or the model was chosen on purpose (e.g. a review)
+        if st in INHERITING_TYPES:
+            # Their built-in definition inherits the main model, so CLAUDE_CODE_SUBAGENT_MODEL does not reach them.
+            log({"phase": "pre", "tool": tool, "subagent_type": st, "action": "deny"})
+            deny(f"'{st}' without a model runs on the main model: its built-in definition inherits it and ignores "
+                 f"CLAUDE_CODE_SUBAGENT_MODEL. For reading or surveying use subagents:reader. If this needs '{st}' "
+                 "itself, call it again with an explicit model (model: \"haiku\", or \"sonnet\" for judgement).")
+            return
         log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "advise"})
         if MODE != "observe":
             emit({"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext":
@@ -153,7 +161,9 @@ def pre(ev, inp, cwd):
                   "(reading/summarising files or logs, applying decided edits, running commands, web lookups, page "
                   "checks), use subagents:reader / editor / runner / web / browser instead: Haiku with trimmed tools, "
                   "a fraction of the cost. "
-                  "Keep this agent only for work that needs judgement."}})
+                  "Keep this agent only for work that needs judgement. For a long job, give each agent a small batch "
+                  "(a few files or functions) and start a fresh one for the next: an agent re-reads its growing "
+                  "context every turn, so one long-lived worker costs far more than several short ones."}})
         return
     if tool == "Read":
         path = resolve(inp.get("file_path", ""), cwd)
@@ -229,6 +239,7 @@ def main():
 
 
 MODE = os.environ.get("SUBAGENTS_GATE", "on")
+INHERITING_TYPES = ("Explore", "Plan")
 READ_KB = env_kb("SUBAGENTS_READ_KB", 40)
 OUT_KB = env_kb("SUBAGENTS_OUT_KB", 20)
 

@@ -59,3 +59,18 @@ def test_agent_advice_only_for_main_model_delegations(tmp_path):
     assert run("pre", ag(subagent_type="subagents:reader"), tmp_path) is None
     assert run("pre", ag(subagent_type="general-purpose", model="fable"), tmp_path) is None
     assert run("pre", {**ag(subagent_type="Explore"), "agent_id": "a1"}, tmp_path) is None
+
+
+def test_untyped_explore_and_plan_are_denied(tmp_path):
+    ag = lambda **kw: {"tool_name": "Agent", "tool_input": {"prompt": "x", **kw}}
+    for st in ("Explore", "Plan"):
+        out = run("pre", ag(subagent_type=st), tmp_path)
+        assert denied(out), st  # their built-in definition inherits the main model, ignoring CLAUDE_CODE_SUBAGENT_MODEL
+        assert "subagents:reader" in out["hookSpecificOutput"]["permissionDecisionReason"]
+        assert run("pre", ag(subagent_type=st, model="haiku"), tmp_path) is None  # explicit model passes
+    assert "permissionDecision" not in run("pre", ag(subagent_type="general-purpose"), tmp_path)["hookSpecificOutput"]
+
+
+def test_agent_advice_mentions_small_batches(tmp_path):
+    out = run("pre", {"tool_name": "Agent", "tool_input": {"prompt": "x"}}, tmp_path)
+    assert "small batch" in out["hookSpecificOutput"]["additionalContext"]

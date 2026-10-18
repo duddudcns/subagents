@@ -32,7 +32,8 @@ Each agent answers in a fixed short format:
   in any `;`, `&&` or `||` segment, and globs are expanded. It does not apply when the output is piped into head,
   tail, wc or `Select-Object -First`/`-Last`. Other dump forms (`head -c`, `tail -n +1`, scripts) are not caught;
   they get the post reminder instead.
-- **Agent calls get a reminder only:** an Agent call without a `subagents:*` type and without an explicit `model` (it runs on the main model or that agent's default model, with its full tool set) gets a reminder. For mechanical work, the reminder points to the Haiku agents; it never blocks the call.
+- **Agent calls get a reminder:** an Agent call without a `subagents:*` type and without an explicit `model` (it runs on the main model or that agent's default model, with its full tool set) gets a reminder. For mechanical work, the reminder points to the Haiku agents and asks for small batches per worker (an agent re-reads its growing context every turn, so one long-lived worker costs far more than several short ones).
+- **`Explore` and `Plan` without a model are denied:** their built-in definition inherits the main model, so they ignore `CLAUDE_CODE_SUBAGENT_MODEL` (measured 2026-10-19: `Explore` ran on Opus while `general-purpose` ran on Haiku). Use `subagents:reader`, or pass `model` explicitly.
 - **Big outputs get a reminder only:** Bash, PowerShell or Grep output of 20 KB or more adds a reminder. Only the
   output text is counted, not metadata.
 - **Logging:** decisions go to `~/.claude/subagents-gate.jsonl`. Secrets are masked before serialisation, and the
@@ -51,6 +52,19 @@ Each agent answers in a fixed short format:
 /plugin marketplace add duddudcns/claude-plugins
 /plugin install subagents@duddudcns
 ```
+
+## Recommended setting
+
+A plugin cannot set environment variables, so add this to `settings.json` yourself:
+
+```json
+{ "env": { "CLAUDE_CODE_SUBAGENT_MODEL": "haiku" } }
+```
+
+Agents with no model of their own (`general-purpose`, and most plugin agents) then run on Haiku instead of the main
+model. A per-call `model` still wins, so `model: "sonnet"` keeps working for delegated judgement. It takes effect
+after a full restart (`/clear` does not re-read environment variables). Check it once by launching an agent and
+reading `message.model` in its transcript.
 
 ## Recommended rule (add to your CLAUDE.md)
 
