@@ -8,7 +8,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "Bash|PowerShell|Grep",
+        "matcher": "Bash|PowerShell|Grep|Edit|Write|MultiEdit|NotebookEdit",
         "hooks": [ { "type": "command", "command": "python -S -I \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" post || python3 -S -I \"${CLAUDE_PLUGIN_ROOT}/hooks/gate.py\" post", "timeout": 10 } ]
       }
     ]

@@ -34,6 +34,7 @@ Each agent answers in a fixed short format:
   they get the post reminder instead.
 - **Agent calls get a reminder:** an Agent call without a `subagents:*` type and without an explicit `model` (it runs on the main model or that agent's default model, with its full tool set) gets a reminder. For mechanical work, the reminder points to the Haiku agents and asks for small batches per worker (an agent re-reads its growing context every turn, so one long-lived worker costs far more than several short ones).
 - **`Explore` and `Plan` without a model are denied:** their built-in definition inherits the main model, so they ignore `CLAUDE_CODE_SUBAGENT_MODEL` (measured 2026-10-19: `Explore` ran on Opus while `general-purpose` ran on Haiku). Use `subagents:reader`, or pass `model` explicitly.
+- **Decided edits get an editor reminder:** main's own file writes are counted per session (Edit, Write, MultiEdit, NotebookEdit, and shell commands that write files from a script: `sed -i`, `open(..., 'w')`, `write_text`, `Set-Content`, ...). Every 3rd main write since the last `subagents:editor` call (`SUBAGENTS_EDIT_STREAK`), or one write of 40 new lines or more (`SUBAGENTS_EDIT_LINES`), adds a reminder to hand a change that is already decided to `subagents:editor`. Counts live in `~/.claude/subagents-edit-state.json`.
 - **Big outputs get a reminder only:** Bash, PowerShell or Grep output of 20 KB or more adds a reminder. Only the
   output text is counted, not metadata.
 - **Logging:** decisions go to `~/.claude/subagents-gate.jsonl`. Secrets are masked before serialisation, and the
@@ -70,8 +71,10 @@ reading `message.model` in its transcript.
 
 > Judgement stays in main. Mechanical reading, edits, command runs and web lookups go to the subagents agents (subagents:reader, :editor, :runner, :web, :browser).
 > Main reviews every result and verifies flagged points. Main does it directly when the content is what main must
-> judge, or for a few-line edit in a file it already has open. Escalate to Sonnet only after Haiku fails a
-> well-specified task twice.
+> judge (finding the cause, designing the fix), or for a few-line edit in a file it already has open. Once a change is
+> decided (tests from chosen cases, removing debug code, the same patch in several files, landing a dev copy, doc
+> text already written out), the writing goes to subagents:editor with the exact change. Escalate to Sonnet only
+> after Haiku fails a well-specified task twice.
 
 ## Why
 See [BENCHMARK.md](BENCHMARK.md), measured 2026-10-11:

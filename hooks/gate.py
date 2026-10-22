@@ -11,8 +11,13 @@ pre (PreToolUse):
   Counting stops at the threshold. Images and PDFs are exempt, because main may need to see them.
 - The plain shell dump `cat/type/Get-Content/gc FILE...` of a big file is denied in any `;`/`&&`/`||` segment,
   unless the segment is piped into head/tail/wc/Select-Object -First/-Last. Other dump forms get the post reminder.
-post (PostToolUse on Bash, PowerShell, Grep):
+post (PostToolUse on Bash, PowerShell, Grep, Edit, Write, MultiEdit, NotebookEdit):
 - Output text of SUBAGENTS_OUT_KB or more (default 20 KB) adds a reminder. It cannot block, because the call already ran.
+- Main's own file writes are counted per session: Edit/Write/MultiEdit/NotebookEdit, and shell commands that write
+  files from a script (sed -i, open(..., 'w'), write_text, Set-Content, ...). Every SUBAGENTS_EDIT_STREAK-th write
+  (default 3) since the last Agent call to subagents:editor, or one write of SUBAGENTS_EDIT_LINES new lines or more
+  (default 40), adds a reminder to hand a decided change to subagents:editor. Main kept writing decided
+  edits itself (tests from given cases, removing debug code, the same patch in several files) on 2026-10-22.
 
 Every decision is appended to ~/.claude/subagents-gate.jsonl. Secrets are masked before serialisation, and the log
 rotates at 5 MB. SUBAGENTS_GATE=off disables the gate; SUBAGENTS_GATE=observe logs decisions without acting on them.
@@ -38,6 +43,10 @@ DUMP_CMD = re.compile(r"^\s*(cat|type|get-content|gc)\s+(.+?)\s*$", re.I)
 PIPE_LIMITERS = re.compile(r"\|\s*(head|tail|wc)\b|\|\s*(select|select-object)\s+-(first|last)\b|-(totalcount|tail|head)\b",
                            re.I)
 SEGMENT_SPLIT = re.compile(r"\s*(?:;|&&|\|\||\n)\s*")
+WRITE_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
+# Shell forms that write a file from a script; a plain `> file` redirect is too common (logs, /dev/null) to count.
+SCRIPT_WRITE = re.compile(r"\bsed\s+(-\w*\s+)*-i|\bopen\([^)]*['\"][wa]b?['\"]|\.write_(text|bytes)\(|"
+                          r"\b(set-content|add-content|out-file)\b|\bperl\s+-\w*i", re.I)
 SECRET = re.compile(r"""(?ix)(authorization|bearer|api[_-]?key|access[_-]?key|token|passw(?:or)?d|secret)
                         (["'=:\s]+)(?:(?:bearer|basic)\s+)?("[^"]*"|'[^']*'|[^\s"']+)""")
 
@@ -144,6 +153,8 @@ def pre(ev, inp, cwd):
         return
     if tool in ("Agent", "Task"):
         st, model = str(inp.get("subagent_type") or ""), str(inp.get("model") or "")
+        if st == "subagents:editor":
+            reset_writes(ev)
         if st.startswith("subagents:") or model:
             return  # already a Haiku agent, or the model was chosen on purpose (e.g. a review)
         if st in INHERITING_TYPES:
@@ -212,19 +223,82 @@ def response_text(resp):
     return str(resp)
 
 
+def written_lines(tool, inp):
+    """New lines main wrote in this call, or None when the call writes no file."""
+    if tool in ("Edit", "Write", "NotebookEdit"):
+        text = inp.get("new_string") or inp.get("content") or inp.get("new_source") or ""
+        return str(text).count("\n") + 1
+    if tool == "MultiEdit":
+        return sum(str(e.get("new_string") or "").count("\n") + 1 for e in inp.get("edits") or [] if isinstance(e, dict))
+    if tool in ("Bash", "PowerShell") and SCRIPT_WRITE.search(str(inp.get("command", ""))):
+        return 0
+    return None
+
+
+def edit_state(update):
+    """Read-modify-write of the per-session write streaks; returns update's result."""
+    path = LOG.with_name("subagents-edit-state.json")
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        state = {}
+    if not isinstance(state, dict):
+        state = {}
+    result = update(state)
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if len(state) > 50:  # keep the newest sessions only
+            state = dict(sorted(state.items(), key=lambda kv: kv[1].get("t", 0))[-50:])
+        path.write_text(json.dumps(state), encoding="utf-8")
+    except Exception:
+        pass
+    return result
+
+
+def count_write(ev, tool, lines):
+    """Advance this session's streak; a reminder text when the streak or the size calls for the editor."""
+    session = str(ev.get("session_id") or "default")
+
+    def bump(state):
+        s = state.get(session) if isinstance(state.get(session), dict) else {}
+        s = {"writes": int(s.get("writes", 0)) + 1, "t": time.time()}
+        state[session] = s
+        return s["writes"]
+
+    writes = edit_state(bump)
+    big = lines >= EDIT_LINES
+    if not big and writes % EDIT_STREAK:
+        return None
+    log({"phase": "post", "tool": tool, "writes": writes, "lines": lines, "action": "remind-editor"})
+    what = f"{lines} new lines in one call" if big else f"{writes} file writes in a row by main"
+    return (f"That was {what}. If the change is already decided (tests from given cases, removing debug code, the "
+            "same patch in several files, copying files into place), hand the remaining writes to subagents:editor "
+            "with the exact change and review its report. Keep writing yourself only while you are still working "
+            "out what the fix is, or for a few lines in a file you have open.")
+
+
+def reset_writes(ev):
+    session = str(ev.get("session_id") or "default")
+    edit_state(lambda state: state.pop(session, None))
+
+
 def post(ev, inp, cwd):
     tool = ev.get("tool_name", "")
+    notes = []
+    lines = written_lines(tool, inp)
+    if lines is not None:
+        note = count_write(ev, tool, lines)
+        if note:
+            notes.append(note)
     kb = len(response_text(ev.get("tool_response")).encode("utf-8", "ignore")) / 1024
-    if kb < OUT_KB:
-        return
-    log({"phase": "post", "tool": tool, "kb": round(kb, 1), "action": "remind",
-         "cmd": str(inp.get("command") or inp.get("pattern") or "")[:200]})
-    if MODE == "observe":
-        return
-    emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext":
-          f"That {tool} call produced about {kb:.0f} KB of output. Whatever part of it was shown stays in the main "
-          "context. For similar long-output work, use subagents:runner for commands or subagents:reader for searches, "
-          "and get back only the result."}})
+    if kb >= OUT_KB and tool not in WRITE_TOOLS:
+        log({"phase": "post", "tool": tool, "kb": round(kb, 1), "action": "remind",
+             "cmd": str(inp.get("command") or inp.get("pattern") or "")[:200]})
+        notes.append(f"That {tool} call produced about {kb:.0f} KB of output. Whatever part of it was shown stays in "
+                     "the main context. For similar long-output work, use subagents:runner for commands or "
+                     "subagents:reader for searches, and get back only the result.")
+    if notes and MODE != "observe":
+        emit({"hookSpecificOutput": {"hookEventName": "PostToolUse", "additionalContext": " ".join(notes)}})
 
 
 def main():
@@ -242,6 +316,8 @@ MODE = os.environ.get("SUBAGENTS_GATE", "on")
 INHERITING_TYPES = ("Explore", "Plan")
 READ_KB = env_kb("SUBAGENTS_READ_KB", 40)
 OUT_KB = env_kb("SUBAGENTS_OUT_KB", 20)
+EDIT_STREAK = max(1, int(env_kb("SUBAGENTS_EDIT_STREAK", 3)))
+EDIT_LINES = env_kb("SUBAGENTS_EDIT_LINES", 40)
 
 if __name__ == "__main__":
     if MODE != "off":

@@ -1,6 +1,6 @@
 ---
 name: editor
-description: Use proactively for mechanical edits the main agent has already decided - renames across files, repeated changes, applying a precise spec, writing a file from a given outline. The instruction must say exactly what to change. Not for design decisions or bug hunting.
+description: Use proactively for mechanical edits the main agent has already decided - renames across files, repeated changes, the same patch in several files, tests from cases main already chose, removing debug code, landing a dev copy, applying a precise spec, writing a file from a given outline or doc text main wrote out. The instruction must say exactly what to change. Not for design decisions or bug hunting.
 tools: Read, Edit, Write, Grep, Glob
 model: haiku
 effort: medium
