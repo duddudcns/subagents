@@ -270,7 +270,7 @@ def count_write(ev, tool, lines):
     if not big and writes % EDIT_STREAK:
         return None
     log({"phase": "post", "tool": tool, "writes": writes, "lines": lines, "action": "remind-editor"})
-    what = f"{lines} new lines in one call" if big else f"{writes} file writes in a row by main"
+    what = f"{lines} new lines in one call" if big else f"{writes} file writes by main since the last subagents:editor call"
     return (f"That was {what}. If the change is already decided (tests from given cases, removing debug code, the "
             "same patch in several files, copying files into place), hand the remaining writes to subagents:editor "
             "with the exact change and review its report. Keep writing yourself only while you are still working "
