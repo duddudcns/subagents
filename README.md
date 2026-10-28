@@ -34,6 +34,7 @@ Each agent answers in a fixed short format:
   they get the post reminder instead.
 - **Agent calls get a reminder:** an Agent call without a `subagents:*` type and without an explicit `model` (it runs on the main model or that agent's default model, with its full tool set) gets a reminder. For mechanical work, the reminder points to the Haiku agents and asks for small batches per worker (an agent re-reads its growing context every turn, so one long-lived worker costs far more than several short ones).
 - **`Explore` and `Plan` without a model are denied:** their built-in definition inherits the main model, so they ignore `CLAUDE_CODE_SUBAGENT_MODEL` (measured 2026-10-19: `Explore` ran on Opus while `general-purpose` ran on Haiku). Use `subagents:reader`, or pass `model` explicitly.
+- **`opus`/`sonnet` need a written reason:** an Agent call outside `subagents:*` (and not `fork`) that passes `model: "opus"` or `"sonnet"` is denied unless its description carries a tag like `[opus: code review needs judgement]`. A per-call model beats `CLAUDE_CODE_SUBAGENT_MODEL`, so habitual expensive picks bypassed the Haiku default (2026-10-29: `general-purpose` was 49% of a week's usage). Allowed calls log their description to the gate log.
 - **Decided edits get an editor reminder:** main's own file writes are counted per session (Edit, Write, MultiEdit, NotebookEdit, and shell commands that write files from a script: `sed -i`, `open(..., 'w')`, `write_text`, `Set-Content`, ...). Every 3rd main write since the last `subagents:editor` call (`SUBAGENTS_EDIT_STREAK`), or one write of 40 new lines or more (`SUBAGENTS_EDIT_LINES`), adds a reminder to hand a change that is already decided to `subagents:editor`. Counts live in `~/.claude/subagents-edit-state.json`.
 - **Big outputs get a reminder only:** Bash, PowerShell or Grep output of 20 KB or more adds a reminder. Only the
   output text is counted, not metadata.
@@ -63,7 +64,7 @@ A plugin cannot set environment variables, so add this to `settings.json` yourse
 ```
 
 Agents with no model of their own (`general-purpose`, and most plugin agents) then run on Haiku instead of the main
-model. A per-call `model` still wins, so `model: "sonnet"` keeps working for delegated judgement. It takes effect
+model. A per-call `model` still wins, so `model: "sonnet"` keeps working for delegated judgement (with a `[sonnet: reason]` tag in the description). It takes effect
 after a full restart (`/clear` does not re-read environment variables). Check it once by launching an agent and
 reading `message.model` in its transcript.
 

@@ -4,6 +4,8 @@ pre (PreToolUse):
 - Agent/Task calls without a subagents:* type or an explicit model get a reminder to use the Haiku agents for
   mechanical work and to keep each worker's batch small. Explore and Plan without a model are denied: their built-in
   definition inherits the main model and ignores CLAUDE_CODE_SUBAGENT_MODEL (measured 2026-10-19).
+  model opus/sonnet outside subagents:* and fork is denied without a "[opus: reason]" tag in the description:
+  a per-call model beats CLAUDE_CODE_SUBAGENT_MODEL (general-purpose was 49% of a week, 2026-10-29).
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
   They are bulk by nature, so they go to subagents:web or subagents:browser.
 - A Read whose returned bytes reach SUBAGENTS_READ_KB (default 40 KB) is denied. The bytes are counted for the
@@ -155,14 +157,26 @@ def pre(ev, inp, cwd):
         st, model = str(inp.get("subagent_type") or ""), str(inp.get("model") or "")
         if st == "subagents:editor":
             reset_writes(ev)
-        if st.startswith("subagents:") or model:
-            return  # already a Haiku agent, or the model was chosen on purpose (e.g. a review)
+        if st.startswith("subagents:") or st == "fork":
+            return  # already a Haiku agent; a fork always runs on the main model and ignores model
+        if model.lower() in EXPENSIVE_MODELS and not re.search(
+                rf"\[{re.escape(model.lower())}:\s*\S[^\]]*\]", str(inp.get("description") or ""), re.I):
+            log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "model": model,
+                 "action": "deny"})
+            deny(f"model '{model}' on '{st or 'general-purpose'}' costs several times Haiku. If Haiku (or a "
+                 "subagents:* agent) can do this, call again without the model. If it really needs this model, "
+                 f"say why in the description, e.g. description: \"[{model.lower()}: code review needs judgement] ...\".")
+            return
+        if model:
+            log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "model": model,
+                 "action": "allow", "description": str(inp.get("description") or "")[:200]})
+            return  # the model was chosen on purpose, with a reason when it is an expensive one
         if st in INHERITING_TYPES:
             # Their built-in definition inherits the main model, so CLAUDE_CODE_SUBAGENT_MODEL does not reach them.
             log({"phase": "pre", "tool": tool, "subagent_type": st, "action": "deny"})
             deny(f"'{st}' without a model runs on the main model: its built-in definition inherits it and ignores "
                  f"CLAUDE_CODE_SUBAGENT_MODEL. For reading or surveying use subagents:reader. If this needs '{st}' "
-                 "itself, call it again with an explicit model (model: \"haiku\", or \"sonnet\" for judgement).")
+                 "itself, call it again with an explicit model (model: \"haiku\"; \"sonnet\" or \"opus\" need a [model: reason] tag in the description).")
             return
         log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "advise"})
         if MODE != "observe":
@@ -314,6 +328,7 @@ def main():
 
 MODE = os.environ.get("SUBAGENTS_GATE", "on")
 INHERITING_TYPES = ("Explore", "Plan")
+EXPENSIVE_MODELS = ("opus", "sonnet")
 READ_KB = env_kb("SUBAGENTS_READ_KB", 40)
 OUT_KB = env_kb("SUBAGENTS_OUT_KB", 20)
 EDIT_STREAK = max(1, int(env_kb("SUBAGENTS_EDIT_STREAK", 3)))
