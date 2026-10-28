@@ -1,9 +1,9 @@
 """Delegation gate for the main agent. Calls made by subagents (input carries agent_id) are never gated.
 
 pre (PreToolUse):
-- Agent/Task calls without a subagents:* type or an explicit model get a reminder to use the Haiku agents for
-  mechanical work and to keep each worker's batch small. Explore and Plan without a model are denied: their built-in
-  definition inherits the main model and ignores CLAUDE_CODE_SUBAGENT_MODEL (measured 2026-10-19).
+- Agent/Task calls outside subagents:* and fork must name a model, or they are denied (0.9.0): an unnamed model
+  silently falls back to CLAUDE_CODE_SUBAGENT_MODEL (Haiku, weak for judgement work) or, for Explore/Plan and when
+  that variable is unset, the main model (measured 2026-10-19). fork ignores model and only gets the reminder.
   model opus/sonnet/fable (any ID of those families) outside subagents:* and fork is denied without a "[opus: reason]" tag in the description:
   a per-call model beats CLAUDE_CODE_SUBAGENT_MODEL (general-purpose was 49% of a week, 2026-10-29).
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
@@ -172,12 +172,17 @@ def pre(ev, inp, cwd):
             log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "model": model,
                  "action": "allow", "description": str(inp.get("description") or "")[:200]})
             return  # the model was chosen on purpose, with a reason when it is an expensive one
-        if st in INHERITING_TYPES:
-            # Their built-in definition inherits the main model, so CLAUDE_CODE_SUBAGENT_MODEL does not reach them.
-            log({"phase": "pre", "tool": tool, "subagent_type": st, "action": "deny"})
-            deny(f"'{st}' without a model runs on the main model: its built-in definition inherits it and ignores "
-                 f"CLAUDE_CODE_SUBAGENT_MODEL. For reading or surveying use subagents:reader. If this needs '{st}' "
-                 "itself, call it again with an explicit model (model: \"haiku\"; \"sonnet\" or \"opus\" need a [model: reason] tag in the description).")
+        if st != "fork":
+            # A missing model falls back to CLAUDE_CODE_SUBAGENT_MODEL, or to the main model for Explore/Plan (their
+            # built-in definition inherits it) and wherever that variable is unset, so the choice must be explicit.
+            log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "deny"})
+            inherits = (f"'{st}' runs on the main model without one (its built-in definition ignores "
+                        "CLAUDE_CODE_SUBAGENT_MODEL). ") if st in INHERITING_TYPES else ""
+            deny(f"Name the model for '{st or 'general-purpose'}'. {inherits}Mechanical work (reading, decided edits, "
+                 "commands, web, pages) goes to subagents:reader / editor / runner / web / browser instead. Otherwise "
+                 "call again with model: \"haiku\", or \"sonnet\"/\"opus\"/\"fable\" with a [model: reason] tag in "
+                 "the description. Give each agent a small batch (a few files or functions) and start a fresh one "
+                 "for the next.")
             return
         log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "advise"})
         if MODE != "observe":

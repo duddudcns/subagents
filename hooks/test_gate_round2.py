@@ -52,10 +52,9 @@ def test_log_stays_valid_json_and_masks_quoted_secrets(tmp_path):
 
 def test_agent_advice_only_for_main_model_delegations(tmp_path):
     ag = lambda **kw: {"tool_name": "Agent", "tool_input": {"prompt": "x", **kw}}
-    out = run("pre", ag(subagent_type="general-purpose"), tmp_path)
+    out = run("pre", ag(subagent_type="fork"), tmp_path)  # since 0.9.0 only fork gets advice without a model
     assert "subagents:reader" in out["hookSpecificOutput"]["additionalContext"]
     assert "permissionDecision" not in out["hookSpecificOutput"]  # advice, never a deny
-    assert run("pre", ag(), tmp_path) is not None  # default type is general-purpose
     assert run("pre", ag(subagent_type="subagents:reader"), tmp_path) is None
     assert run("pre", ag(subagent_type="general-purpose", model="haiku"), tmp_path) is None
     assert run("pre", {**ag(subagent_type="Explore"), "agent_id": "a1"}, tmp_path) is None
@@ -68,9 +67,8 @@ def test_untyped_explore_and_plan_are_denied(tmp_path):
         assert denied(out), st  # their built-in definition inherits the main model, ignoring CLAUDE_CODE_SUBAGENT_MODEL
         assert "subagents:reader" in out["hookSpecificOutput"]["permissionDecisionReason"]
         assert run("pre", ag(subagent_type=st, model="haiku"), tmp_path) is None  # explicit model passes
-    assert "permissionDecision" not in run("pre", ag(subagent_type="general-purpose"), tmp_path)["hookSpecificOutput"]
 
 
 def test_agent_advice_mentions_small_batches(tmp_path):
-    out = run("pre", {"tool_name": "Agent", "tool_input": {"prompt": "x"}}, tmp_path)
+    out = run("pre", {"tool_name": "Agent", "tool_input": {"prompt": "x", "subagent_type": "fork"}}, tmp_path)
     assert "small batch" in out["hookSpecificOutput"]["additionalContext"]
