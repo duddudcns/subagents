@@ -57,7 +57,7 @@ def test_agent_advice_only_for_main_model_delegations(tmp_path):
     assert "permissionDecision" not in out["hookSpecificOutput"]  # advice, never a deny
     assert run("pre", ag(), tmp_path) is not None  # default type is general-purpose
     assert run("pre", ag(subagent_type="subagents:reader"), tmp_path) is None
-    assert run("pre", ag(subagent_type="general-purpose", model="fable"), tmp_path) is None
+    assert run("pre", ag(subagent_type="general-purpose", model="haiku"), tmp_path) is None
     assert run("pre", {**ag(subagent_type="Explore"), "agent_id": "a1"}, tmp_path) is None
 
 
