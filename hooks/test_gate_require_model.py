@@ -9,7 +9,7 @@ def test_missing_model_is_denied(tmp_path):
         out = run("pre", ag(subagent_type=st), tmp_path)
         assert denied(out), st
         reason = out["hookSpecificOutput"]["permissionDecisionReason"]
-        assert 'explicit model' in reason and '"haiku"' in reason, st
+        assert 'model: "haiku"' in reason, st
         assert "subagents:reader" in reason, st
 
 

@@ -4,6 +4,8 @@ pre (PreToolUse):
 - Agent/Task calls outside subagents:* and fork must name a model, or they are denied (0.9.0): an unnamed model
   silently falls back to CLAUDE_CODE_SUBAGENT_MODEL (Haiku, weak for judgement work) or, for Explore/Plan and when
   that variable is unset, the main model (measured 2026-10-19). fork ignores model and only gets the reminder.
+  model opus/sonnet/fable (any ID of those families) outside subagents:* and fork is denied without a "[opus: reason]" tag in the description:
+  a per-call model beats CLAUDE_CODE_SUBAGENT_MODEL (general-purpose was 49% of a week, 2026-10-29).
 - WebFetch, and the browser page readers get_page_text / read_page in every browser variant, are always denied.
   They are bulk by nature, so they go to subagents:web or subagents:browser.
 - A Read whose returned bytes reach SUBAGENTS_READ_KB (default 40 KB) is denied. The bytes are counted for the
@@ -157,10 +159,19 @@ def pre(ev, inp, cwd):
             reset_writes(ev)
         if st.startswith("subagents:"):
             return  # already a Haiku agent
+        # Family match, so full IDs (claude-opus-...) count too; a fork ignores model and only gets the advice.
+        family = next((f for f in EXPENSIVE_MODELS if f in model.lower()), "") if st != "fork" else ""
+        if family and not re.search(rf"\[{family}:\s*[^\s\]][^\]]*\]", str(inp.get("description") or ""), re.I):
+            log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "model": model,
+                 "action": "deny"})
+            deny(f"model '{model}' on '{st or 'general-purpose'}' costs several times Haiku. If Haiku (or a "
+                 "subagents:* agent) can do this, call again without the model. If it really needs this model, "
+                 f"say why in the description, e.g. description: \"[{family}: code review needs judgement] ...\".")
+            return
         if model and st != "fork":
             log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "model": model,
                  "action": "allow", "description": str(inp.get("description") or "")[:200]})
-            return  # the model was chosen on purpose
+            return  # the model was chosen on purpose, with a reason when it is an expensive one
         if st != "fork":
             # A missing model falls back to CLAUDE_CODE_SUBAGENT_MODEL, or to the main model for Explore/Plan (their
             # built-in definition inherits it) and wherever that variable is unset, so the choice must be explicit.
@@ -169,7 +180,8 @@ def pre(ev, inp, cwd):
                         "CLAUDE_CODE_SUBAGENT_MODEL). ") if st in INHERITING_TYPES else ""
             deny(f"Name the model for '{st or 'general-purpose'}'. {inherits}Mechanical work (reading, decided edits, "
                  "commands, web, pages) goes to subagents:reader / editor / runner / web / browser instead. Otherwise "
-                 "call again with an explicit model (\"haiku\", \"sonnet\", \"opus\" or \"fable\"). Give each agent a small batch (a few files or functions) and start a fresh one "
+                 "call again with model: \"haiku\", or \"sonnet\"/\"opus\"/\"fable\" with a [model: reason] tag in "
+                 "the description. Give each agent a small batch (a few files or functions) and start a fresh one "
                  "for the next.")
             return
         log({"phase": "pre", "tool": tool, "subagent_type": st or "general-purpose", "action": "advise"})
@@ -322,6 +334,7 @@ def main():
 
 MODE = os.environ.get("SUBAGENTS_GATE", "on")
 INHERITING_TYPES = ("Explore", "Plan")
+EXPENSIVE_MODELS = ("opus", "sonnet", "fable")
 READ_KB = env_kb("SUBAGENTS_READ_KB", 40)
 OUT_KB = env_kb("SUBAGENTS_OUT_KB", 20)
 EDIT_STREAK = max(1, int(env_kb("SUBAGENTS_EDIT_STREAK", 3)))
