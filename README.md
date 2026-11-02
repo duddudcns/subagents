@@ -16,6 +16,13 @@ Each agent answers in a fixed short format:
 - It writes "not found" when something is missing and never guesses.
 - It lists tricky points (rounding, null vs empty, boundary values, later corrections) under "Uncertain".
 
+## Background hook (main agent only)
+
+`hooks/background.py` turns every main-agent `Bash`/`PowerShell` call into `run_in_background: true`, so a long command
+never blocks the conversation; the agent is re-invoked when it exits. Subagent calls (input carries `agent_id`) are left
+in the foreground, since a subagent can end before its background output arrives. It returns no permission decision, so
+the normal permission flow still applies. `SUBAGENTS_BACKGROUND=off` disables it. Any error lets the call through.
+
 ## Gate hook (enforced, main agent only)
 
 `hooks/gate.py` enforces delegation instead of relying on a rule. Calls made by subagents are never gated.
