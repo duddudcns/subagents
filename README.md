@@ -18,10 +18,14 @@ Each agent answers in a fixed short format:
 
 ## Background hook (main agent only)
 
-`hooks/background.py` turns every main-agent `Bash`/`PowerShell` call into `run_in_background: true`, so a long command
-never blocks the conversation; the agent is re-invoked when it exits. Subagent calls (input carries `agent_id`) are left
-in the foreground, since a subagent can end before its background output arrives. It returns no permission decision, so
-the normal permission flow still applies. `SUBAGENTS_BACKGROUND=off` disables it. Any error lets the call through.
+`hooks/background.py` defaults a main-agent `Bash`/`PowerShell` call to `run_in_background: true` when the call does not
+set it, so a long command does not block the conversation; the agent is re-invoked when it exits. An explicit boolean
+is the agent's own choice and is left alone (a non-boolean value counts as unset): pass `run_in_background: false` only for a short command that ends in a few
+seconds (a quick read or listing) to get its output at once, and leave it unset (or `true`) for builds, tests, and
+anything of unknown length. The hook never inspects the command text, and it cannot teach the agent this convention:
+put that guidance in your own rules or `CLAUDE.md`. Subagent calls (input carries `agent_id`) are not
+modified, since a subagent can end before its background output arrives. It returns no permission decision, so the
+normal permission flow still applies. `SUBAGENTS_BACKGROUND=off` disables it. Any error lets the call through.
 
 ## Gate hook (enforced, main agent only)
 
